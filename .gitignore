@@ -28,3 +28,7 @@ venv/
 *.csv
 *.out
 *.log
+
+# Local project instructions and independent thesis repository
+AGENTS.md
+/Thesis_Alexandre_Gallet/
