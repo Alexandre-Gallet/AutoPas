@@ -168,7 +168,7 @@ class LinkedCells : public CellBasedParticleContainer<FullParticleCell<Particle_
         // Delete dummy particles of each cell.
         this->getCells()[cellId].deleteDummyParticles();
 
-        // if empty
+        // skip if empty. This check comes after in case the cell becomes empty due to deletion of dummy particles
         if (this->getCells()[cellId].isEmpty()) continue;
 
         const auto [cellLowerCorner, cellUpperCorner] = this->getCellBlock().getCellBoundingBox(cellId);
@@ -178,9 +178,10 @@ class LinkedCells : public CellBasedParticleContainer<FullParticleCell<Particle_
           // if not in cell
           if (utils::notInBox(pIter->getR(), cellLowerCorner, cellUpperCorner)) {
             myInvalidParticles.push_back(*pIter);
-            // swap-delete
+            // This does not actually swap particles, instead it overrides invalid particle with last particle, then deletes last particle
             *pIter = particleVec.back();
             particleVec.pop_back();
+            // no increment in this clause because the inserted particle must now be checked
           } else {
             ++pIter;
           }

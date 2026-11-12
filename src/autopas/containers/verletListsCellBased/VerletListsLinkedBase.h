@@ -181,6 +181,8 @@ class VerletListsLinkedBase : public ParticleContainerInterface<Particle_T> {
       return autopas::LeavingParticleCollector::collectParticlesAndMarkNonOwnedAsDummy(_linkedCells);
     }
     _neighborListIsValid.store(false, std::memory_order_relaxed);
+    // The preservation case was handled above.
+    // LinkedCells covers the same preservation case again because LinkedCells can chosen as a container directly
     return _linkedCells.updateContainer(false);
   }
 

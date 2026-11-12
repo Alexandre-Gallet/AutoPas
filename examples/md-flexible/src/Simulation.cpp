@@ -284,15 +284,18 @@ void Simulation::run() {
       }
 
       _timers.migratingParticleExchange.start();
+      //TODO: Understand precisely how this function works, specifically with respect to the SFC order we will introduce and whether it breaks it
       _domainDecomposition->exchangeMigratingParticles(*_autoPasContainer, emigrants);
       _timers.migratingParticleExchange.stop();
 
       _timers.reflectParticlesAtBoundaries.start();
+      //TODO: Understand precisely how this function works, specifically with respect to the SFC order we will introduce and whether it breaks it. This function may be skipped when we use periodic boundaries but reflective boundaries case must also be considered
       _domainDecomposition->reflectParticlesAtBoundaries(*_autoPasContainer,
                                                          *_configuration.getParticlePropertiesLibrary());
       _timers.reflectParticlesAtBoundaries.stop();
 
       _timers.haloParticleExchange.start();
+      //TODO: Understand precisely how this function works, specifically with respect to the SFC order we will introduce and whether it breaks it
       _domainDecomposition->exchangeHaloParticles(*_autoPasContainer);
       _timers.haloParticleExchange.stop();
 

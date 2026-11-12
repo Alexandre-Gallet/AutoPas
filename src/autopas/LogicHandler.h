@@ -1067,7 +1067,7 @@ std::tuple<const std::vector<FullParticleCell<Particle_T>> &, const std::vector<
 LogicHandler<Particle_T>::getParticleBuffers() const {
   return {_particleBuffer, _haloParticleBuffer};
 }
-
+//TODO:: exact understanding of the details in this function, follow the callers down to the actual implementation
 template <typename Particle_T>
 template <class Functor>
 IterationMeasurements LogicHandler<Particle_T>::computeInteractions(Functor &functor, TraversalInterface &traversal) {
