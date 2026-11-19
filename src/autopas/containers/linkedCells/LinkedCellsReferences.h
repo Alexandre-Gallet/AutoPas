@@ -13,7 +13,9 @@
 #include "autopas/containers/LeavingParticleCollector.h"
 #include "autopas/containers/LoadEstimators.h"
 #include "autopas/containers/cellTraversals/BalancedTraversal.h"
+#include "autopas/containers/cellTraversals/CellTraversal.h"
 #include "autopas/containers/linkedCells/ParticleVector.h"
+#include "autopas/containers/linkedCells/traversals/LCTraversalInterface.h"
 #include "autopas/iterators/ContainerIterator.h"
 #include "autopas/options/DataLayoutOption.h"
 #include "autopas/options/LoadEstimatorOption.h"
@@ -30,7 +32,7 @@ namespace autopas {
 /**
  * LinkedCells class.
  * This class uses a list of neighboring cells to store the particles.
- * These cells dimensions are at least as large as the given cutoff radius,
+ * These cell's dimensions are at least as large as the given cutoff radius,
  * therefore short-range interactions only need to be calculated between
  * particles in neighboring cells.
  * @tparam Particle_T type of the Particle

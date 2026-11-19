@@ -1134,6 +1134,7 @@ IterationMeasurements LogicHandler<Particle_T>::computeInteractions(Functor &fun
   timerComputeRemainder.start();
   const bool newton3 = autoTuner.getCurrentConfig().newton3;
   const auto dataLayout = autoTuner.getCurrentConfig().dataLayout;
+  // TODO: Understand how the Remainder Particles get calculated and consider how an SFC order global particle vector affects this
   computeRemainderInteractions(functor, newton3, dataLayout);
   timerComputeRemainder.stop();
 

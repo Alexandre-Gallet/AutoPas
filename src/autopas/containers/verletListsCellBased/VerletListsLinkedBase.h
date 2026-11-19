@@ -19,9 +19,10 @@ namespace autopas {
  * Base class for Verlet lists which use an underlying linked cells container.
  * Implementation have to use a constant cutoff radius of the interaction.
  * Cells are created using a cell size of at least cutoff + skin radius.
- * @tparam Particle_T
+ * @tparam Particle_T Particle type stored in the container.
+ * @tparam Storage_T Linked cells container used to store the particles.
  */
-template <class Particle_T>
+template <class Particle_T, class Storage_T = LinkedCells<Particle_T>>
 class VerletListsLinkedBase : public ParticleContainerInterface<Particle_T> {
  public:
   /**
@@ -32,7 +33,7 @@ class VerletListsLinkedBase : public ParticleContainerInterface<Particle_T> {
   /**
    * Type of the ParticleCell used by the underlying linked cells.
    */
-  using ParticleCellType = typename LinkedCells<Particle_T>::ParticleCellType;
+  using ParticleCellType = typename Storage_T::ParticleCellType;
 
   /**
    * Constructor of the VerletListsLinkedBase class.
@@ -331,7 +332,7 @@ class VerletListsLinkedBase : public ParticleContainerInterface<Particle_T> {
 
  protected:
   /// internal linked cells storage, handles Particle storage and used to build verlet lists
-  LinkedCells<Particle_T> _linkedCells;
+  Storage_T _linkedCells;
 
   /// specifies if the neighbor list is currently valid
   std::atomic<bool> _neighborListIsValid{false};

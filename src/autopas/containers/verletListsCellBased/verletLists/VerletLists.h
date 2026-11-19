@@ -8,6 +8,7 @@
 
 #include "VerletListHelpers.h"
 #include "autopas/baseFunctors/InteractionListGeneratorFunctor.h"
+#include "autopas/containers/linkedCells/LinkedCells.h"
 #include "autopas/containers/linkedCells/traversals/LCC08Traversal.h"
 #include "autopas/containers/verletListsCellBased/VerletListsLinkedBase.h"
 #include "autopas/containers/verletListsCellBased/verletLists/traversals/VLListIterationTraversal.h"
@@ -23,20 +24,22 @@ namespace autopas {
  * The VerletLists class uses neighborhood lists to calculate pairwise or triwise interactions of particles.
  * It is optimized for a constant, i.e. particle independent, cutoff radius of the interaction.
  * Cells are created using a cell size of at least cutoff + skin radius.
- * @tparam Particle_T
+ * @tparam Particle_T Particle type stored in the container.
+ * @tparam Storage_T Linked cells container used to store the particles.
  */
-template <class Particle_T>
-class VerletLists : public VerletListsLinkedBase<Particle_T> {
+template <class Particle_T, class Storage_T = LinkedCells<Particle_T>>
+class VerletLists : public VerletListsLinkedBase<Particle_T, Storage_T> {
   /**
    * Type of the Particle.
    */
   using ParticleType = Particle_T;
+
+ public:
   /**
    * Type of the ParticleCell used by the underlying linked cells.
    */
-  using ParticleCellType = FullParticleCell<Particle_T>;
+  using ParticleCellType = typename VerletListsLinkedBase<Particle_T, Storage_T>::ParticleCellType;
 
- public:
   /**
    * Enum that specifies how the verlet lists should be built
    */
@@ -64,7 +67,7 @@ class VerletLists : public VerletListsLinkedBase<Particle_T> {
   VerletLists(const std::array<double, 3> &boxMin, const std::array<double, 3> &boxMax, const double cutoff,
               const double skin, const BuildVerletListType buildVerletListType = BuildVerletListType::VerletSoA,
               const double cellSizeFactor = 1.0)
-      : VerletListsLinkedBase<Particle_T>(boxMin, boxMax, cutoff, skin, cellSizeFactor),
+      : VerletListsLinkedBase<Particle_T, Storage_T>(boxMin, boxMax, cutoff, skin, cellSizeFactor),
         _buildVerletListType(buildVerletListType) {}
 
   /**
@@ -136,6 +139,7 @@ class VerletLists : public VerletListsLinkedBase<Particle_T> {
     _pairListWasBuilt = false;
 
     // Depending on the traversal type, different neighbor lists are built. Mostly relevant for triwise interactions.
+    //TODO: Understand how the neighbor lists are build for the other traversals
     switch (traversal->getTraversalType()) {
       case TraversalOption::vl_list_iteration: {
         this->updateNeighborLists(buildWithN3);
@@ -221,18 +225,20 @@ class VerletLists : public VerletListsLinkedBase<Particle_T> {
    */
   void updateNeighborListsSingleThread(size_t N, double interactionLength, DataLayoutOption dataLayout,
                                        bool useNewton3) {
+    // creates tmp lists
     std::vector<std::vector<size_t>> tempLists(N);
-
+    // policy dictates how particles get added to tmp lists
     typename VerletListHelpers<Particle_T>::CRSNeighborListPolicy policy(tempLists, _particleToIndex);
-
+    // Generator will decide when particles are within the cut-off distance
     InteractionListGeneratorFunctor<Particle_T, typename VerletListHelpers<Particle_T>::CRSNeighborListPolicy> f(
         policy, interactionLength, useNewton3);
-
+    // An additional traversal (not the one passed in yaml) to create neighbour lists
     auto traversal = LCC08Traversal<
         ParticleCellType,
         InteractionListGeneratorFunctor<Particle_T, typename VerletListHelpers<Particle_T>::CRSNeighborListPolicy>>(
         this->_linkedCells.getCellBlock().getCellsPerDimensionWithHalo(), f, this->getInteractionLength(),
         this->_linkedCells.getCellBlock().getCellLength(), dataLayout, useNewton3);
+    // computeInteractions is misleading this call only creates the neighbour lists TODO: Check whether this introduces unnecessary overhead
     this->_linkedCells.computeInteractions(&traversal);
 
     // Prefix-sum + copy:
