@@ -32,6 +32,9 @@ static std::set<VectorizationPatternOption> allCompatibleVectorizationPattern(co
       return std::set<VectorizationPatternOption>{VectorizationPatternOption::NA};
     case DataLayoutOption::soa:
       switch (container) {
+        case ContainerOption::verletListsReferences:
+          // Force evaluation for reference-backed Verlet lists currently supports only AoS.
+          return {};
         case ContainerOption::verletLists:
         case ContainerOption::verletListsCells:
         case ContainerOption::pairwiseVerletLists:
