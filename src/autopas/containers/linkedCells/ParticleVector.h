@@ -7,6 +7,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <mutex>
+#include <span>
 #include <vector>
 
 #include "autopas/utils/WrapOpenMP.h"
@@ -50,20 +53,23 @@ class ParticleVector {
    * Remove all halo particles from the container and mark it as dirty.
    */
   void clearHaloParticles() {
-    _particleListImp.erase(std::remove_if(_particleListImp.begin(), _particleListImp.end(),
-                                          [](const auto &particle) { return particle.isHalo(); }),
-                           _particleListImp.end());
-    _dirty = true;
-    _dirtyIndex = 0;
+    eraseIf([](const auto &particle) { return particle.isHalo(); });
   }
 
   /**
    * Remove all dummy particles from the container and mark it as dirty.
    */
   void deleteDummyParticles() {
-    _particleListImp.erase(std::remove_if(_particleListImp.begin(), _particleListImp.end(),
-                                          [](const auto &particle) { return particle.isDummy(); }),
-                           _particleListImp.end());
+    eraseIf([](const auto &particle) { return particle.isDummy(); });
+  }
+
+  /**
+   * Compact the vector in order and request a full rebuild of the cell references.
+   * @param remove Predicate selecting particles to erase.
+   */
+  template <class Predicate>
+  void eraseIf(Predicate remove) {
+    std::erase_if(_particleListImp, remove);
     _dirty = true;
     _dirtyIndex = 0;
   }
@@ -73,13 +79,25 @@ class ParticleVector {
    * @param particle A reference to the particle to be stored
    */
   void push_back(const Particle_T &particle) {
-    _particleListLock.lock();
+    std::lock_guard guard(_particleListLock);
+    const bool relocates = willReallocateOnAppend();
+    _particleListImp.push_back(particle);
     _dirty = true;
-    if (_particleListImp.capacity() == _particleListImp.size()) {
+    if (relocates) {
       _dirtyIndex = 0;
     }
-    _particleListImp.push_back(particle);
-    _particleListLock.unlock();
+  }
+
+  /** @return Whether appending the next particle will relocate existing particles. */
+  [[nodiscard]] bool willReallocateOnAppend() const { return _particleListImp.size() == _particleListImp.capacity(); }
+
+  /** @return A view of the current particle slots, valid until the vector is structurally modified. */
+  [[nodiscard]] std::span<Particle_T> particles() { return _particleListImp; }
+
+  /** Undo an append after all earlier cell references have been restored. */
+  void undoLastAppend() {
+    _particleListImp.pop_back();
+    markAsClean();
   }
 
   /**

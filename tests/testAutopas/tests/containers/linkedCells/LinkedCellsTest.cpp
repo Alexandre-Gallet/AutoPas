@@ -6,8 +6,63 @@
 
 #include "LinkedCellsTest.h"
 
+#include <cstdint>
+#include <map>
+
 #include "autopas/particles/OwnershipState.h"
 #include "autopas/utils/ArrayUtils.h"
+
+using LinkedCellsReferencesStorageTest = AutoPasTestBase;
+
+TEST_F(LinkedCellsReferencesStorageTest, deletingInterleavedHaloKeepsOwnedCellReferences) {
+  autopas::LinkedCellsReferences<ParticleFP64> storage({1., 1., 1.}, {6., 6., 6.}, 1., .2);
+  storage.addParticle({{1.1, 2., 2.}, {}, 10});
+  storage.addHaloParticle({{.95, 2., 2.}, {}, 11, autopas::OwnershipState::halo});
+  storage.addParticle({{3., 2., 2.}, {}, 12});
+  storage.addParticle({{5., 2., 2.}, {}, 13});
+
+  const std::map<unsigned long, size_t> expectedCells{{10, storage.getCellBlock().get1DIndexOfPosition({1.1, 2., 2.})},
+                                                      {12, storage.getCellBlock().get1DIndexOfPosition({3., 2., 2.})},
+                                                      {13, storage.getCellBlock().get1DIndexOfPosition({5., 2., 2.})}};
+  storage.deleteHaloParticles();
+
+  // Read the owning vector first, so even a dangling cell pointer can be detected without dereferencing it.
+  std::map<const ParticleFP64 *, unsigned long> live;
+  storage.forEach([&](const auto &p) { live.emplace(&p, p.getID()); }, autopas::IteratorBehavior::ownedOrHaloOrDummy);
+  ASSERT_EQ(live.size(), expectedCells.size());
+  std::map<unsigned long, size_t> actualCells;
+  for (size_t i = 0; i < storage.getCells().size(); ++i) {
+    for (const auto *p : storage.getCells()[i]._particles) {
+      ASSERT_TRUE(live.contains(p));
+      EXPECT_TRUE(actualCells.emplace(live.at(p), i).second);
+    }
+  }
+  EXPECT_EQ(actualCells, expectedCells);
+}
+
+TEST_F(LinkedCellsReferencesStorageTest, growthKeepsLeavingOwnerInItsCellUntilCollection) {
+  autopas::LinkedCellsReferences<ParticleFP64> storage({1., 1., 1.}, {6., 6., 6.}, 1., .2);
+  storage.addParticle({{1.02, 2., 2.}, {}, 10});
+  auto &originalCell = storage.getCellBlock().getContainingCell({1.02, 2., 2.});
+  const auto originalAddress = reinterpret_cast<std::uintptr_t>(&originalCell[0]);
+  originalCell[0].setR({.99, 2., 2.});
+
+  // Observe relocation directly rather than assuming a particular std::vector growth factor.
+  unsigned long id = 20;
+  do {
+    ASSERT_LT(id, 1024ul);
+    ASSERT_NO_THROW(storage.addParticle({{4., 2., 2.}, {}, id++}));
+    ASSERT_EQ(originalCell.size(), 1ul);
+  } while (reinterpret_cast<std::uintptr_t>(&originalCell[0]) == originalAddress);
+  EXPECT_EQ(originalCell[0].getID(), 10ul);
+  const auto leaving = storage.updateContainer(false);
+  ASSERT_EQ(leaving.size(), 1ul);
+  EXPECT_EQ(leaving.front().getID(), 10ul);
+  EXPECT_TRUE(leaving.front().isOwned());
+  EXPECT_TRUE(originalCell.isEmpty());
+  EXPECT_EQ(storage.getNumberOfParticles(autopas::IteratorBehavior::owned), id - 20);
+  EXPECT_TRUE(storage.updateContainer(false).empty());
+}
 
 TYPED_TEST_SUITE_P(LinkedCellsTest);
 
