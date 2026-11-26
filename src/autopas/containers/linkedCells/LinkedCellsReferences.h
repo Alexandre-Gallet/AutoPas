@@ -92,6 +92,8 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
     std::lock_guard guard(addParticleLock);
     updateDirtyParticleReferences();
     std::vector<ParticleCellType *> previousCells;
+    // An owned particle may already be outside the domain and still await collection.
+    // If this append moves it in memory, reconnect its previous cell to its new address.
     if (_particleList.willReallocateOnAppend() and not _particleList.particles().empty()) {
       previousCells = getParticleCells();
     }
@@ -139,6 +141,7 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
     CellBasedParticleContainer<ParticleCellType>::deleteAllParticles();
   }
 
+  // TODO: Needs better variable names, survivors instead of kept for better readability
   /**
    * @copydoc ParticleContainerInterface::deleteHaloParticles()
    */
@@ -151,6 +154,8 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
       size_t kept = firstHalo - particles.begin();
       for (size_t i = kept + 1; i < particles.size(); ++i) {
         if (not particles[i].isHalo()) {
+          // Copy this survivor's cell pointer from slot i to the slot it will occupy after halo removal.
+          // kept++ uses the current destination slot, then advances kept for the next survivor.
           cells[kept++] = cells[i];
         }
       }
@@ -591,25 +596,37 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
   }
 
  private:
-  /** Record each particle's current cell before moving any vector slots. Unreferenced slots stay null. */
+  //TODO: rename the variables for better readability recordOfMap instead of cells, rename the function to not confuse the reader
+  /**
+ * Record which cell currently holds a pointer to each particle slot.
+ * @pre Every particle pointer stored in a cell points into the current particle vector.
+ * @return A table indexed by particle slot. An entry is null if no cell references that slot.
+ */
   [[nodiscard]] std::vector<ParticleCellType *> getParticleCells() {
     auto particles = _particleList.particles();
     std::vector<ParticleCellType *> cells(particles.size(), nullptr);
     for (auto &cell : this->_cells) {
       for (const auto *particle : cell._particles) {
+        // Walk the cells in any order. The pointer difference gives the particle's slot in the vector.
         cells[particle - particles.data()] = &cell;
       }
     }
     return cells;
   }
 
-  /** Restore existing cell memberships using the new addresses, including particles awaiting migration. */
+  //TODO: Need variable renaming cells vs cell vs this->_cells are all different objects
+  /**
+   * Refill the cells with the current particle addresses, preserving the recorded cell assignments.
+   * @param cells Entry i gives the cell to receive &particles[i], or nullptr to leave that slot
+   * unreferenced. After an erase, the entries must follow the surviving particles in vector order.
+   */
   void restoreCellReferences(const std::vector<ParticleCellType *> &cells) {
     for (auto &cell : this->_cells) {
       cell.clear();
     }
     auto particles = _particleList.particles();
     for (size_t i = 0; i < cells.size(); ++i) {
+      //was the cell recorded for particle slot i
       if (cells[i] != nullptr) {
         // These memberships were checked at insertion. Each cell retains capacity for all its previous entries.
         cells[i]->_particles.push_back(&particles[i]);

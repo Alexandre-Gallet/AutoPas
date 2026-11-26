@@ -82,12 +82,16 @@ void VerletListsReferencesTest::buildAndTraverse(Functor_T &functor, autopas::In
                                       autopas::Newton3Option::disabled,
                                       interactionType,
                                       autopas::VectorizationPatternOption::NA};
+  // Check that AutoPas allows this combination before testing how it behaves.
   ASSERT_TRUE(config.hasCompatibleValues());
   const autopas::ContainerSelectorInfo info{boxMin, boxMax, cutoff, GetParam(), skin, 64, 8, 100, config.loadEstimator};
+  // ParticleFP64 is the particle type. The container option selects the storage backend.
+  // Check that the factory created the reference-backed Verlet container.
   auto container = autopas::ContainerSelector<ParticleFP64>::generateContainer(config.container, info);
   ASSERT_TRUE(autopas::withStaticContainerType(*container, [](auto &selected) {
     return std::is_same_v<std::remove_cvref_t<decltype(selected)>, autopas::VerletListsReferences<ParticleFP64>>;
   }));
+  // Assign IDs in position order so the mock functor can identify each particle it receives.
   size_t id = 0;
   for (const auto &position : positions) {
     container->addParticle(ParticleFP64{position, {}, id++});
@@ -95,6 +99,8 @@ void VerletListsReferencesTest::buildAndTraverse(Functor_T &functor, autopas::In
   auto traversal = autopas::TraversalSelector::generateTraversalFromConfig<ParticleFP64>(
       config, functor, container->getTraversalSelectorInfo());
   ASSERT_NE(traversal, nullptr);
+  // Build the neighbor lists from the particle positions, then traverse them.
+  // The traversal makes the pair or triplet calls expected by the calling test.
   container->rebuildNeighborLists(traversal.get());
   container->computeInteractions(traversal.get());
 }
@@ -103,15 +109,20 @@ TEST_P(VerletListsReferencesTest, testBuildAndIteratePairwise) {
   MPairwiseFunctor functor;
   const auto first = ::testing::Property(&ParticleFP64::getID, 0ul);
   const auto second = ::testing::Property(&ParticleFP64::getID, 1ul);
+  // With Newton3 disabled, each particle must be visited once as the center.
+  // Checking both ID orders catches a duplicated direction as well as a missing one.
   EXPECT_CALL(functor, AoSFunctor(first, second, newton3));
   EXPECT_CALL(functor, AoSFunctor(second, first, newton3));
 
   // At both cell-size factors the particles lie on opposite sides of the cell boundary at x = 3.5.
+  // buildAndTraverse calls computeInteractions leading to the above functor calls
   buildAndTraverse(functor, autopas::InteractionTypeOption::pairwise, {{3.25, 3., 3.}, {3.75, 3., 3.}});
 }
 
 TEST_P(VerletListsReferencesTest, testBuildAndIterateTriwise) {
   MTriwiseFunctor functor;
+  // One geometric triplet gives three calls with Newton3 disabled, one per center.
+  // The two neighbors may appear in either order, but all three IDs must be distinct.
   for (size_t centerID = 0; centerID < 3; ++centerID) {
     EXPECT_CALL(functor,
                 AoSFunctor(::testing::Property(&ParticleFP64::getID, centerID), ::testing::_, ::testing::_, newton3))
@@ -120,7 +131,8 @@ TEST_P(VerletListsReferencesTest, testBuildAndIterateTriwise) {
                       ::testing::UnorderedElementsAre(0ul, 1ul, 2ul));
         });
   }
-
+  // At both cell-size factors the particles lie on opposite sides of the cell boundary at x = 3.5 and the center particle lies directly on it.
+  // buildAndTraverse calls computeInteractions leading to the above functor calls
   buildAndTraverse(functor, autopas::InteractionTypeOption::triwise, {{3.25, 3., 3.}, {3.75, 3., 3.}, {3.5, 3.5, 3.}});
 }
 
@@ -129,6 +141,8 @@ TEST_P(VerletListsReferencesTest, testCutoffAndSkin) {
   GTEST_SKIP() << "Cutoff and skin test not implemented yet.";
 }
 
+// Move particle 30 into range of particle 20 and check that rebuilding adds the new neighbor
+// relationship. Rebuild again at the same positions to catch missing or duplicated entries.
 TEST_P(VerletListsReferencesTest, testRebuildTwice) {
   Backend container(boxMin, boxMax, cutoff, skin, Backend::VerletSoA, GetParam());
   MPairwiseFunctor functor;
@@ -151,6 +165,8 @@ TEST_P(VerletListsReferencesTest, testRebuildTwice) {
   expectNeighborRows(container, moved);
 }
 
+// Add particles until we observe that particle 10 has changed address. The old Verlet list
+// must reject traversal. After cleanup and rebuilding, each of the three owners has two neighbors.
 TEST_P(VerletListsReferencesTest, testReferencesAfterGrowth) {
   Backend container(boxMin, boxMax, cutoff, skin, Backend::VerletSoA, GetParam());
   MPairwiseFunctor functor;
@@ -176,10 +192,13 @@ TEST_P(VerletListsReferencesTest, testReferencesAfterGrowth) {
   ASSERT_TRUE(container.updateContainer(false).empty());
   container.rebuildNeighborLists(&traversal);
   expectNeighborRows(container, {{10, {20, 30}}, {20, {10, 30}}, {30, {10, 20}}});
+  // With Newton3 disabled, each of the three owners visits both neighbors: six directed calls.
   EXPECT_CALL(functor, AoSFunctor(::testing::_, ::testing::_, false)).Times(6);
   container.computeInteractions(&traversal);
 }
 
+// Erasing the interleaved halo shifts vector slots and invalidates the list. Marking owner 20
+// as a dummy preserves its slot, so owners 10 and 30 can still interact through the existing list.
 TEST_P(VerletListsReferencesTest, testReferencesAfterDeletion) {
   Backend container(boxMin, boxMax, cutoff, skin, Backend::VerletSoA, GetParam());
   MPairwiseFunctor functor;
@@ -210,7 +229,7 @@ TEST_P(VerletListsReferencesTest, testReferencesAfterDeletion) {
   EXPECT_CALL(functor, AoSFunctor(first, last, false));
   EXPECT_CALL(functor, AoSFunctor(last, first, false));
   container.computeInteractions(&traversal);
-
+  // Physically remove the dummy. The next rebuild must contain only the surviving owners, 10 and 30.
   ASSERT_TRUE(container.updateContainer(false).empty());
   ASSERT_THROW(container.computeInteractions(&traversal), autopas::utils::ExceptionHandler::AutoPasException);
   container.rebuildNeighborLists(&traversal);
@@ -220,6 +239,8 @@ TEST_P(VerletListsReferencesTest, testReferencesAfterDeletion) {
   expectNeighborRows(container, {});
 }
 
+// Exercise halo exchange while reusing a Verlet list. Returning halo 2 must recover its old slot
+// with updated coordinates. New halo 3 goes into the buffer and must still contribute to LJ and ATM forces.
 TEST_P(VerletListsReferencesTest, testHaloOwnership) {
   constexpr auto pairwise = autopas::InteractionTypeOption::pairwise;
   constexpr auto triwise = autopas::InteractionTypeOption::triwise;
@@ -292,7 +313,8 @@ TEST_P(VerletListsReferencesTest, testHaloOwnership) {
     EXPECT_THAT(owners, ::testing::ElementsAre(0ul, 1ul));
   };
 
-  // Each owner interacts with the other owner, the returning halo and the buffered halo.
+  // Compute the expected forces by calling the same functors directly on the known pairs and triplets.
+  // Agreement for each owner checks that the list and the buffer together account for the interactions.
   resetForces();
   handler.computeInteractionsPipeline(&lj, pairwise);
   for (size_t i = 0; i < 2; ++i) {

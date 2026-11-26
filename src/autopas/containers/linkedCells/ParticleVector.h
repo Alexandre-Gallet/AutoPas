@@ -75,8 +75,10 @@ class ParticleVector {
   }
 
   /**
-   * Add a Particle to the data structure.
-   * @param particle A reference to the particle to be stored
+   * Append a particle while holding the same lock for the capacity check and the append.
+   * After a successful append, mark the new slot dirty. If the vector reallocated,
+   * every existing particle has a new address, so the dirty range starts at slot zero.
+   * @param particle Particle to append.
    */
   void push_back(const Particle_T &particle) {
     std::lock_guard guard(_particleListLock);
@@ -94,7 +96,11 @@ class ParticleVector {
   /** @return A view of the current particle slots, valid until the vector is structurally modified. */
   [[nodiscard]] std::span<Particle_T> particles() { return _particleListImp; }
 
-  /** Undo an append after all earlier cell references have been restored. */
+  /**
+   * Roll back the last append if inserting the new particle's cell pointer failed.
+   * @pre The last particle has no cell pointer. All earlier cell pointers are valid.
+   * Removing the last slot preserves the addresses of all earlier particles.
+   */
   void undoLastAppend() {
     _particleListImp.pop_back();
     markAsClean();

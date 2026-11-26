@@ -32,6 +32,8 @@ TEST_F(ContainerSelectorTest, testReferenceVerletSearchSpace) {
 
   for (const auto interaction : {autopas::InteractionTypeOption::pairwise, autopas::InteractionTypeOption::triwise}) {
     std::set<autopas::Configuration> expected;
+    // generateAllValidConfigurations() considers cell-size factors {0.5, 1.0, 1.5} by default.
+    // VerletListsReferences requires a factor of at least 1.0, so only 1.0 and 1.5 belong in the expected set.
     for (double cellSizeFactor : {1., 1.5}) {
       expected.emplace(container, cellSizeFactor, autopas::TraversalOption::vl_list_iteration,
                        autopas::LoadEstimatorOption::none, autopas::DataLayoutOption::aos,
