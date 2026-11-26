@@ -36,15 +36,17 @@ static_assert(std::is_same_v<ReferenceVerletLists::ParticleCellType, autopas::Re
 
 using Backend = autopas::VerletListsReferences<ParticleFP64>;
 using PairTraversal = autopas::VLListIterationTraversal<Backend::ParticleCellType, MPairwiseFunctor>;
+using MolecularBackend = autopas::VerletListsReferences<Molecule>;
 using NeighborRows = std::map<unsigned long, std::multiset<unsigned long>>;
 
 // Decode the CRS indices using current addresses from the owning vector. Keep duplicates visible.
-void expectNeighborRows(Backend &container, const NeighborRows &expected) {
+template <class Particle>
+void expectNeighborRows(autopas::VerletListsReferences<Particle> &container, const NeighborRows &expected) {
   const auto &list = container.getNeighborList();
   const auto &index = container.getParticleIndex();
   ASSERT_EQ(list.size(), expected.size());
   ASSERT_EQ(index.size(), list.size());
-  std::vector<const ParticleFP64 *> byIndex(list.size(), nullptr);
+  std::vector<const Particle *> byIndex(list.size(), nullptr);
   container.forEach(
       [&](const auto &p) {
         ASSERT_TRUE(index.contains(&p));
@@ -68,6 +70,26 @@ void expectNeighborRows(Backend &container, const NeighborRows &expected) {
     }
   }
   EXPECT_EQ(actual, expected);
+}
+
+// Compare every owned molecule by ID so vector order and cell order are irrelevant.
+void expectOwnedForces(MolecularBackend &container, const std::vector<Molecule> &reference) {
+  std::map<unsigned long, std::array<double, 3>> measured;
+  for (auto it = container.begin(autopas::IteratorBehavior::owned); it.isValid(); ++it) {
+    ASSERT_TRUE(measured.emplace(it->getID(), it->getF()).second);
+  }
+  for (const auto &p : reference) {
+    if (not p.isOwned()) continue;
+    SCOPED_TRACE(::testing::Message() << "owner " << p.getID());
+    const auto it = measured.find(p.getID());
+    ASSERT_NE(it, measured.end());
+    EXPECT_NE(p.getF(), (std::array<double, 3>{}));
+    for (size_t d = 0; d < 3; ++d) {
+      EXPECT_NEAR(it->second[d], p.getF()[d], 1e-10) << "component " << d;
+    }
+    measured.erase(it);
+  }
+  EXPECT_TRUE(measured.empty());
 }
 }  // namespace
 
@@ -137,8 +159,22 @@ TEST_P(VerletListsReferencesTest, testBuildAndIterateTriwise) {
 }
 
 TEST_P(VerletListsReferencesTest, testCutoffAndSkin) {
-  // @todo Distinguish neighbor-list inclusion within the skin from force evaluation within the cutoff.
-  GTEST_SKIP() << "Cutoff and skin test not implemented yet.";
+  MolecularBackend container(boxMin, boxMax, cutoff, skin, MolecularBackend::VerletSoA, GetParam());
+  container.addParticle({{2., 3., 3.}, {}, 10});
+  container.addParticle({{2. + cutoff + skin / 2., 3., 3.}, {}, 20});
+  LJFunctorType<> lj(cutoff);
+  lj.setParticleProperties(24., .16);
+  autopas::VLListIterationTraversal<MolecularBackend::ParticleCellType, LJFunctorType<>> traversal(lj, dataLayout,
+                                                                                                  newton3);
+  // The list includes both directions at distance 1.1. The physical cutoff of 1.0 excludes the pair from LJ.
+  container.rebuildNeighborLists(&traversal);
+  expectNeighborRows(container, {{10, {20}}, {20, {10}}});
+  lj.initTraversal();
+  container.computeInteractions(&traversal);
+  lj.endTraversal(newton3);
+  for (const auto &p : container) {
+    EXPECT_EQ(p.getF(), (std::array<double, 3>{})) << "owner " << p.getID();
+  }
 }
 
 // Move particle 30 into range of particle 20 and check that rebuilding adds the new neighbor
@@ -339,13 +375,66 @@ TEST_P(VerletListsReferencesTest, testHaloOwnership) {
 }
 
 TEST_P(VerletListsReferencesTest, testLJForces) {
-  // @todo Compare forces by particle ID against a trusted pairwise reference using a nontrivial configuration.
-  GTEST_SKIP() << "LJ force comparison not implemented yet.";
+  MolecularBackend container(boxMin, boxMax, cutoff, skin, MolecularBackend::VerletSoA, GetParam());
+  std::vector<Molecule> reference{{{3.2, 3., 3.}, {}, 30}, {{3.8, 3.2, 3.1}, {}, 10}, {{3.5, 3.6, 3.4}, {}, 20}};
+  for (const auto &p : reference) container.addParticle(p);
+
+  LJFunctorType<> lj(cutoff);
+  lj.setParticleProperties(24., .16);
+  autopas::VLListIterationTraversal<MolecularBackend::ParticleCellType, LJFunctorType<>> traversal(lj, dataLayout,
+                                                                                                  newton3);
+  container.rebuildNeighborLists(&traversal);
+  lj.initTraversal();
+  container.computeInteractions(&traversal);
+  lj.endTraversal(newton3);
+
+  // Each owner receives contributions from the other two. Enumerate them directly on independent copies.
+  lj.initTraversal();
+  for (auto &center : reference) {
+    for (auto &neighbor : reference) {
+      if (center.getID() != neighbor.getID()) lj.AoSFunctor(center, neighbor, newton3);
+    }
+  }
+  lj.endTraversal(newton3);
+  expectOwnedForces(container, reference);
 }
 
 TEST_P(VerletListsReferencesTest, testATMForces) {
-  // @todo Compare forces by particle ID against a trusted three-body reference using a non-collinear triplet.
-  GTEST_SKIP() << "ATM force comparison not implemented yet.";
+  MolecularBackend container(boxMin, boxMax, cutoff, skin, MolecularBackend::VerletSoA, GetParam());
+  std::vector<Molecule> reference{{{1.12, 3.1, 3.1}, {}, 30},  {{1.47, 3.52, 3.21}, {}, 10},
+                                  {{1.25, 3.05, 3.67}, {}, 20}, {{.9, 3.31, 3.29}, {}, 40}};
+  reference.back().setOwnershipState(autopas::OwnershipState::halo);
+  for (const auto &p : reference) {
+    if (p.isOwned()) {
+      container.addParticle(p);
+    } else {
+      container.addHaloParticle(p);
+    }
+  }
+
+  ATMFunctorType<> atm(cutoff);
+  atm.setParticleProperties(.004);
+  autopas::VLListIterationTraversal<MolecularBackend::ParticleCellType, ATMFunctorType<>> traversal(atm, dataLayout,
+                                                                                                    newton3);
+  container.rebuildNeighborLists(&traversal);
+  atm.initTraversal();
+  container.computeInteractions(&traversal);
+  atm.endTraversal(newton3);
+
+  // Each owned center sees three unordered pairs of neighbors. Two of those pairs contain the halo.
+  atm.initTraversal();
+  for (auto &center : reference) {
+    if (not center.isOwned()) continue;
+    for (size_t j = 0; j < reference.size(); ++j) {
+      if (reference[j].getID() == center.getID()) continue;
+      for (size_t k = j + 1; k < reference.size(); ++k) {
+        if (reference[k].getID() == center.getID()) continue;
+        atm.AoSFunctor(center, reference[j], reference[k], newton3);
+      }
+    }
+  }
+  atm.endTraversal(newton3);
+  expectOwnedForces(container, reference);
 }
 
 INSTANTIATE_TEST_SUITE_P(Generated, VerletListsReferencesTest, ::testing::Values(1.0, 2.0),
