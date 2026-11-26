@@ -7,6 +7,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <mutex>
+#include <span>
 #include <vector>
 
 #include "autopas/utils/WrapOpenMP.h"
@@ -50,36 +53,57 @@ class ParticleVector {
    * Remove all halo particles from the container and mark it as dirty.
    */
   void clearHaloParticles() {
-    _particleListImp.erase(std::remove_if(_particleListImp.begin(), _particleListImp.end(),
-                                          [](const auto &particle) { return particle.isHalo(); }),
-                           _particleListImp.end());
-    _dirty = true;
-    _dirtyIndex = 0;
+    eraseIf([](const auto &particle) { return particle.isHalo(); });
   }
 
   /**
    * Remove all dummy particles from the container and mark it as dirty.
    */
   void deleteDummyParticles() {
-    _particleListImp.erase(std::remove_if(_particleListImp.begin(), _particleListImp.end(),
-                                          [](const auto &particle) { return particle.isDummy(); }),
-                           _particleListImp.end());
+    eraseIf([](const auto &particle) { return particle.isDummy(); });
+  }
+
+  /**
+   * Compact the vector in order and request a full rebuild of the cell references.
+   * @param remove Predicate selecting particles to erase.
+   */
+  template <class Predicate>
+  void eraseIf(Predicate remove) {
+    std::erase_if(_particleListImp, remove);
     _dirty = true;
     _dirtyIndex = 0;
   }
 
   /**
-   * Add a Particle to the data structure.
-   * @param particle A reference to the particle to be stored
+   * Append a particle while holding the same lock for the capacity check and the append.
+   * After a successful append, mark the new slot dirty. If the vector reallocated,
+   * every existing particle has a new address, so the dirty range starts at slot zero.
+   * @param particle Particle to append.
    */
   void push_back(const Particle_T &particle) {
-    _particleListLock.lock();
+    std::lock_guard guard(_particleListLock);
+    const bool relocates = willReallocateOnAppend();
+    _particleListImp.push_back(particle);
     _dirty = true;
-    if (_particleListImp.capacity() == _particleListImp.size()) {
+    if (relocates) {
       _dirtyIndex = 0;
     }
-    _particleListImp.push_back(particle);
-    _particleListLock.unlock();
+  }
+
+  /** @return Whether appending the next particle will relocate existing particles. */
+  [[nodiscard]] bool willReallocateOnAppend() const { return _particleListImp.size() == _particleListImp.capacity(); }
+
+  /** @return A view of the current particle slots, valid until the vector is structurally modified. */
+  [[nodiscard]] std::span<Particle_T> particles() { return _particleListImp; }
+
+  /**
+   * Roll back the last append if inserting the new particle's cell pointer failed.
+   * @pre The last particle has no cell pointer. All earlier cell pointers are valid.
+   * Removing the last slot preserves the addresses of all earlier particles.
+   */
+  void undoLastAppend() {
+    _particleListImp.pop_back();
+    markAsClean();
   }
 
   /**

@@ -6,6 +6,10 @@
 
 #pragma once
 
+#include <algorithm>
+#include <mutex>
+#include <vector>
+
 #include "autopas/cells/ReferenceParticleCell.h"
 #include "autopas/containers/CellBasedParticleContainer.h"
 #include "autopas/containers/CellBlock3D.h"
@@ -13,7 +17,9 @@
 #include "autopas/containers/LeavingParticleCollector.h"
 #include "autopas/containers/LoadEstimators.h"
 #include "autopas/containers/cellTraversals/BalancedTraversal.h"
+#include "autopas/containers/cellTraversals/CellTraversal.h"
 #include "autopas/containers/linkedCells/ParticleVector.h"
+#include "autopas/containers/linkedCells/traversals/LCTraversalInterface.h"
 #include "autopas/iterators/ContainerIterator.h"
 #include "autopas/options/DataLayoutOption.h"
 #include "autopas/options/LoadEstimatorOption.h"
@@ -30,7 +36,7 @@ namespace autopas {
 /**
  * LinkedCells class.
  * This class uses a list of neighboring cells to store the particles.
- * These cells dimensions are at least as large as the given cutoff radius,
+ * These cell's dimensions are at least as large as the given cutoff radius,
  * therefore short-range interactions only need to be calculated between
  * particles in neighboring cells.
  * @tparam Particle_T type of the Particle
@@ -83,21 +89,34 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
    * @copydoc ParticleContainerInterface::addParticleImpl()
    */
   void addParticleImpl(const Particle_T &p) override {
-    addParticleLock.lock();
-    _particleList.push_back(p);
+    std::lock_guard guard(addParticleLock);
     updateDirtyParticleReferences();
-    addParticleLock.unlock();
+    std::vector<ParticleCellType *> previousCells;
+    // An owned particle may already be outside the domain and still await collection.
+    // If this append moves it in memory, reconnect its previous cell to its new address.
+    if (_particleList.willReallocateOnAppend() and not _particleList.particles().empty()) {
+      previousCells = getParticleCells();
+    }
+    _particleList.push_back(p);
+    if (not previousCells.empty()) {
+      restoreCellReferences(previousCells);
+    }
+    auto &stored = _particleList.particles().back();
+    if (not stored.isDummy()) {
+      try {
+        _cellBlock.getContainingCell(stored.getR()).addParticleReference(&stored);
+      } catch (...) {
+        _particleList.undoLastAppend();
+        throw;
+      }
+    }
+    _particleList.markAsClean();
   }
 
   /**
    * @copydoc ParticleContainerInterface::addHaloParticleImpl()
    */
-  void addHaloParticleImpl(const Particle_T &haloParticle) override {
-    addParticleLock.lock();
-    _particleList.push_back(haloParticle);
-    updateDirtyParticleReferences();
-    addParticleLock.unlock();
-  }
+  void addHaloParticleImpl(const Particle_T &haloParticle) override { LinkedCellsReferences::addParticleImpl(haloParticle); }
 
   /**
    * @copydoc ParticleContainerInterface::updateHaloParticle()
@@ -122,11 +141,30 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
     CellBasedParticleContainer<ParticleCellType>::deleteAllParticles();
   }
 
+  // TODO: Needs better variable names, survivors instead of kept for better readability
   /**
    * @copydoc ParticleContainerInterface::deleteHaloParticles()
    */
   void deleteHaloParticles() override {
-    _particleList.clearHaloParticles();
+    updateDirtyParticleReferences();
+    const auto particles = _particleList.particles();
+    const auto firstHalo = std::ranges::find_if(particles, [](const auto &p) { return p.isHalo(); });
+    if (firstHalo != particles.end()) {
+      auto cells = getParticleCells();
+      size_t kept = firstHalo - particles.begin();
+      for (size_t i = kept + 1; i < particles.size(); ++i) {
+        if (not particles[i].isHalo()) {
+          // Copy this survivor's cell pointer from slot i to the slot it will occupy after halo removal.
+          // kept++ uses the current destination slot, then advances kept for the next survivor.
+          cells[kept++] = cells[i];
+        }
+      }
+      cells.resize(kept);
+      _particleList.clearHaloParticles();
+      restoreCellReferences(cells);
+      _particleList.markAsClean();
+    }
+    // Also release halo-cell entries previously marked as dummy on a list-reuse iteration.
     _cellBlock.clearHaloCells();
   }
 
@@ -156,8 +194,7 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
   void rebuildNeighborLists(TraversalInterface *traversal) override { updateDirtyParticleReferences(); }
 
   /**
-   * Updates all the References in the cells that are out of date.
-   * @note Removes all dummy particles.
+   * Rebuild dirty cell references from particle positions. Dummy particles receive no new reference.
    */
   void updateDirtyParticleReferences() {
     if (_particleList.isDirty()) {
@@ -312,84 +349,18 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
       return LeavingParticleCollector::collectParticlesAndMarkNonOwnedAsDummy(*this);
     }
 
-    std::vector<Particle_T> invalidParticles;
-
-    // for exception handling in parallel region
-    bool exceptionCaught{false};
-    std::string exceptionMsg{""};
-
-    AUTOPAS_OPENMP(parallel) {
-      // private for each thread!
-      std::vector<Particle_T> myInvalidParticles, myInvalidNotOwnedParticles;
-      AUTOPAS_OPENMP(for)
-      for (size_t cellId = 0; cellId < this->getCells().size(); ++cellId) {
-        // Delete dummy particles of each cell.
-        this->getCells()[cellId].deleteDummyParticles();
-
-        // if empty
-        if (this->getCells()[cellId].isEmpty()) continue;
-
-        auto [cellLowerCorner, cellUpperCorner] = this->getCellBlock().getCellBoundingBox(cellId);
-
-        auto &particleVec = this->getCells()[cellId]._particles;
-        for (auto pIter = particleVec.begin(); pIter != particleVec.end();) {
-          if ((*pIter)->isOwned() and utils::notInBox((*pIter)->getR(), cellLowerCorner, cellUpperCorner)) {
-            myInvalidParticles.push_back(**pIter);
-
-            // multi layer swap-delete
-            // we copy the particle behind the last pointer in the cell over the particle we want to delete
-            **pIter = *particleVec.back();
-            // since we will not actually delete the particle we just copied mark it as dummy.
-            particleVec.back()->setOwnershipState(OwnershipState::dummy);
-            // then we pop the last pointer from the cell.
-            particleVec.pop_back();
-
-          } else {
-            ++pIter;
-          }
-        }
-      }
-      // implicit barrier here
-      // the barrier is needed because iterators are not thread safe w.r.t. addParticle()
-
-      // this loop is executed for every thread and thus parallel. Don't use #pragma omp for here!
-      // addParticle might throw. Set exceptionCaught to true, so we can handle that after the OpenMP region
-      try {
-        for (auto &&p : myInvalidParticles) {
-          // if not in halo
-          if (utils::inBox(p.getR(), this->getBoxMin(), this->getBoxMax())) {
-            this->template addParticle<false>(p);
-          } else {
-            myInvalidNotOwnedParticles.push_back(p);
-          }
-        }
-      } catch (const std::exception &e) {
-        exceptionCaught = true;
-        AUTOPAS_OPENMP(critical)
-        exceptionMsg.append(e.what());
-      }
-      AUTOPAS_OPENMP(critical) {
-        // merge private vectors to global one.
-        invalidParticles.insert(invalidParticles.end(), myInvalidNotOwnedParticles.begin(),
-                                myInvalidNotOwnedParticles.end());
+    const auto &boxMin = this->getBoxMin();
+    const auto &boxMax = this->getBoxMax();
+    std::vector<Particle_T> leaving;
+    for (const auto &p : _particleList.particles()) {
+      if (p.isOwned() and utils::notInBox(p.getR(), boxMin, boxMax)) {
+        leaving.push_back(p);
       }
     }
-
-    if (exceptionCaught) {
-      autopas::utils::ExceptionHandler::exception(exceptionMsg);
-    }
-
-    // we have to remove halo particles after the above for-loop since removing halo particles changes the underlying
-    // datastructure (_particleList) which invalidates the references in the cells.
-    // Note: removing halo particles before the loop and do a call to updateDirtyParticleReferences() right after won't
-    // work since there are owned particles in _particleList which fall into the halo area (they are not yet filtered
-    // out by the above loop) and can therefore not added to halo cells during particle insert in
-    // updateDirtyParticleReferences()
-    this->deleteHaloParticles();
-
-    _particleList.deleteDummyParticles();
+    // Compact once, then assign all surviving owners to cells at their current positions.
+    _particleList.eraseIf([&](const auto &p) { return not p.isOwned() or utils::notInBox(p.getR(), boxMin, boxMax); });
     updateDirtyParticleReferences();
-    return invalidParticles;
+    return leaving;
   }
 
   /**
@@ -624,6 +595,46 @@ class LinkedCellsReferences : public CellBasedParticleContainer<ReferenceParticl
     return {cellIndex, particleIndex};
   }
 
+ private:
+  //TODO: rename the variables for better readability recordOfMap instead of cells, rename the function to not confuse the reader
+  /**
+ * Record which cell currently holds a pointer to each particle slot.
+ * @pre Every particle pointer stored in a cell points into the current particle vector.
+ * @return A table indexed by particle slot. An entry is null if no cell references that slot.
+ */
+  [[nodiscard]] std::vector<ParticleCellType *> getParticleCells() {
+    auto particles = _particleList.particles();
+    std::vector<ParticleCellType *> cells(particles.size(), nullptr);
+    for (auto &cell : this->_cells) {
+      for (const auto *particle : cell._particles) {
+        // Walk the cells in any order. The pointer difference gives the particle's slot in the vector.
+        cells[particle - particles.data()] = &cell;
+      }
+    }
+    return cells;
+  }
+
+  //TODO: Need variable renaming cells vs cell vs this->_cells are all different objects
+  /**
+   * Refill the cells with the current particle addresses, preserving the recorded cell assignments.
+   * @param cells Entry i gives the cell to receive &particles[i], or nullptr to leave that slot
+   * unreferenced. After an erase, the entries must follow the surviving particles in vector order.
+   */
+  void restoreCellReferences(const std::vector<ParticleCellType *> &cells) {
+    for (auto &cell : this->_cells) {
+      cell.clear();
+    }
+    auto particles = _particleList.particles();
+    for (size_t i = 0; i < cells.size(); ++i) {
+      //was the cell recorded for particle slot i
+      if (cells[i] != nullptr) {
+        // These memberships were checked at insertion. Each cell retains capacity for all its previous entries.
+        cells[i]->_particles.push_back(&particles[i]);
+      }
+    }
+  }
+
+ protected:
   /**
    * object that stores the actual Particles and keeps track of the references.
    */

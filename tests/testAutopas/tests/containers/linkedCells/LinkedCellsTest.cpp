@@ -6,8 +6,80 @@
 
 #include "LinkedCellsTest.h"
 
+#include <cstdint>
+#include <map>
+
 #include "autopas/particles/OwnershipState.h"
 #include "autopas/utils/ArrayUtils.h"
+
+using LinkedCellsReferencesStorageTest = AutoPasTestBase;
+
+TEST_F(LinkedCellsReferencesStorageTest, deletingInterleavedHaloKeepsOwnedCellReferences) {
+  // construct LinkedCellsReferences object and add 3 owned and one halo particles in the following structure:
+  // owned|halo|owned|owned
+  //  10  | 11 |  12 | 13
+  autopas::LinkedCellsReferences<ParticleFP64> storage({1., 1., 1.}, {6., 6., 6.}, 1., .2);
+  storage.addParticle({{1.1, 2., 2.}, {}, 10});
+  storage.addHaloParticle({{.95, 2., 2.}, {}, 11, autopas::OwnershipState::halo});
+  storage.addParticle({{3., 2., 2.}, {}, 12});
+  storage.addParticle({{5., 2., 2.}, {}, 13});
+
+  // Map each owned particle ID to the cell index expected from its position.
+  const std::map<unsigned long, size_t> expectedCells{{10, storage.getCellBlock().get1DIndexOfPosition({1.1, 2., 2.})},
+                                                      {12, storage.getCellBlock().get1DIndexOfPosition({3., 2., 2.})},
+                                                      {13, storage.getCellBlock().get1DIndexOfPosition({5., 2., 2.})}};
+  // we remove halo particles which changes the structure:
+  // owned|owned|owned
+  //  10  | 12  | 13
+  // Erasing halo 11 shifts particles 12 and 13 one slot left in the owning vector.
+  // Their original cells must point to their new addresses.
+  storage.deleteHaloParticles();
+
+  // Read the owning vector first, so even a dangling cell pointer can be detected without dereferencing it.
+  std::map<const ParticleFP64 *, unsigned long> live;
+  storage.forEach([&](const auto &p) { live.emplace(&p, p.getID()); }, autopas::IteratorBehavior::ownedOrHaloOrDummy);
+  // check correct count i.e. that one particle was deleted
+  ASSERT_EQ(live.size(), expectedCells.size());
+  std::map<unsigned long, size_t> actualCells;
+  for (size_t i = 0; i < storage.getCells().size(); ++i) {
+    for (const auto *p : storage.getCells()[i]._particles) {
+      //checks that the pointer p is in the live map of particles without dereferencing it incase of a dangling pointer
+      ASSERT_TRUE(live.contains(p));
+      // Insertion succeeds only the first time this particle ID is found across all cells.
+      EXPECT_TRUE(actualCells.emplace(live.at(p), i).second);
+    }
+  }
+  EXPECT_EQ(actualCells, expectedCells);
+}
+
+TEST_F(LinkedCellsReferencesStorageTest, growthKeepsLeavingOwnerInItsCellUntilCollection) {
+  // Record particle 10's cell and address, then move its position just outside the domain. Its original cell still holds its pointer.
+  autopas::LinkedCellsReferences<ParticleFP64> storage({1., 1., 1.}, {6., 6., 6.}, 1., .2);
+  storage.addParticle({{1.02, 2., 2.}, {}, 10});
+  auto &originalCell = storage.getCellBlock().getContainingCell({1.02, 2., 2.});
+  const auto originalAddress = reinterpret_cast<std::uintptr_t>(&originalCell[0]);
+  originalCell[0].setR({.99, 2., 2.});
+
+  // Add particles in another cell until we observe particle 10 at a new address through its original cell.
+  unsigned long id = 11;
+  do {
+    // Fail if we reach the ID limit without observing an address change.
+    ASSERT_LT(id, 1000ul);
+    // add a new  particle in a different cell from particle p_id = 10
+    ASSERT_NO_THROW(storage.addParticle({{4., 2., 2.}, {}, id++}));
+    // sanity check that the cell with particle p_id = 10 still only has one particle
+    ASSERT_EQ(originalCell.size(), 1ul);
+  } while (reinterpret_cast<std::uintptr_t>(&originalCell[0]) == originalAddress);
+  EXPECT_EQ(originalCell[0].getID(), 10ul);
+  // Collect particle 10 and remove its entry from storage. A second update should find no departures.
+  const auto leaving = storage.updateContainer(false);
+  ASSERT_EQ(leaving.size(), 1ul);
+  EXPECT_EQ(leaving.front().getID(), 10ul);
+  EXPECT_TRUE(leaving.front().isOwned());
+  EXPECT_TRUE(originalCell.isEmpty());
+  EXPECT_EQ(storage.getNumberOfParticles(autopas::IteratorBehavior::owned), id - 11);
+  EXPECT_TRUE(storage.updateContainer(false).empty());
+}
 
 TYPED_TEST_SUITE_P(LinkedCellsTest);
 

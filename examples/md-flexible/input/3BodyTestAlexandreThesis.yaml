@@ -11,7 +11,7 @@ traversal                            :  [vl_list_iteration]
 newton3                              :  [disabled]
 data-layout                          :  [AoS]
 
-verlet-rebuild-frequency             :  10
+verlet-rebuild-frequency             :  1
 verlet-skin-radius                   :  0.2
 selector-strategy                    :  Fastest-Absolute-Value
 tuning-strategies                    :  []

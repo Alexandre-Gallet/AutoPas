@@ -109,6 +109,15 @@ std::set<TraversalOption> filterAllOptions(const std::string &prefix, const Inte
 }
 
 /**
+ * Lists the pairwise and triwise traversals supported by reference-backed Verlet lists.
+ * @return Set of applicable traversals.
+ */
+[[maybe_unused]] static const std::set<TraversalOption> &allVLReferencesCompatibleTraversals() {
+  static const std::set<TraversalOption> s{TraversalOption::vl_list_iteration};
+  return s;
+}
+
+/**
  * Lists all traversal options applicable for the Verlet Lists Cells container.
  * @return set of all applicable traversal options.
  */
@@ -214,6 +223,9 @@ std::set<TraversalOption> filterAllOptions(const std::string &prefix, const Inte
         case ContainerOption::verletLists: {
           return allVLCompatibleTraversals();
         }
+        case ContainerOption::verletListsReferences: {
+          return allVLReferencesCompatibleTraversals();
+        }
         case ContainerOption::verletListsCells: {
           return allVLCCompatibleTraversals();
         }
@@ -242,6 +254,9 @@ std::set<TraversalOption> filterAllOptions(const std::string &prefix, const Inte
         }
         case ContainerOption::verletLists: {
           return allVLCompatibleTraversals3B();
+        }
+        case ContainerOption::verletListsReferences: {
+          return allVLReferencesCompatibleTraversals();
         }
         default: {
           static const std::set<TraversalOption> s{};

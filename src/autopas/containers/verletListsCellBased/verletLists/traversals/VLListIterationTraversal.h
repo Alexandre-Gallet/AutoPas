@@ -102,6 +102,7 @@ class VLListIterationTraversal : public TraversalInterface, public VLTraversalIn
       case DataLayoutOption::aos: {
         if (not _useNewton3) {
           // Each particle i owns its own list slice — no write-conflict between iterations.
+          // We use schedule(dynamic) because different particles might have different lengths in neighbor lists
           AUTOPAS_OPENMP(parallel for schedule(dynamic))
           for (size_t i = 0; i < numParticles; ++i) {
             ParticleType &particleI = *indexToParticle[i];

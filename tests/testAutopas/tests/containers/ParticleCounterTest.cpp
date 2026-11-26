@@ -48,15 +48,16 @@ TEST_P(ParticleCounterTest, testGetNumberOfParticles) {
     container->addHaloParticle(p);
   }
 
-  // LinkedCellsReferences remove dummies during adding particles
-  if (containerOption != autopas::options::ContainerOption::linkedCellsReferences) {
-    // add dummy particle
-    for (int i = 0; i < _numDummyParticles; i++) {
-      Molecule p({1., 1., 1.}, {0., 0., 0.}, _numOwnedParticles + _numHaloParticles + i);
-      p.setOwnershipState(autopas::OwnershipState::dummy);
-      container->addParticle(p);
-    }
+  for (int i = 0; i < _numDummyParticles; i++) {
+    Molecule p({1., 1., 1.}, {0., 0., 0.}, _numOwnedParticles + _numHaloParticles + i);
+    p.setOwnershipState(autopas::OwnershipState::dummy);
+    container->addParticle(p);
   }
+
+  // LinkedCellsReferences omits particles that are already dummy when inserting their cell references.
+  const bool usesReferenceCells = containerOption == autopas::ContainerOption::linkedCellsReferences or
+                                  containerOption == autopas::ContainerOption::verletListsReferences;
+  const auto expectedDummyParticles = usesReferenceCells ? 0u : _numDummyParticles;
 
   // by default getNumberOfParticles() should return the number of owned particles
   EXPECT_EQ(container->getNumberOfParticles(), _numOwnedParticles);
@@ -64,11 +65,9 @@ TEST_P(ParticleCounterTest, testGetNumberOfParticles) {
   EXPECT_EQ(container->getNumberOfParticles(autopas::options::IteratorBehavior::halo), _numHaloParticles);
   EXPECT_EQ(container->getNumberOfParticles(autopas::options::IteratorBehavior::ownedOrHalo),
             _numOwnedParticles + _numHaloParticles);
-  if (containerOption != autopas::options::ContainerOption::linkedCellsReferences) {
-    EXPECT_EQ(container->getNumberOfParticles(autopas::options::IteratorBehavior::dummy), _numDummyParticles);
-    EXPECT_EQ(container->getNumberOfParticles(autopas::options::IteratorBehavior::ownedOrHaloOrDummy),
-              _numOwnedParticles + _numHaloParticles + _numDummyParticles);
-  }
+  EXPECT_EQ(container->getNumberOfParticles(autopas::options::IteratorBehavior::dummy), expectedDummyParticles);
+  EXPECT_EQ(container->getNumberOfParticles(autopas::options::IteratorBehavior::ownedOrHaloOrDummy),
+            _numOwnedParticles + _numHaloParticles + expectedDummyParticles);
 }
 
 INSTANTIATE_TEST_SUITE_P(Generated, ParticleCounterTest, ::testing::ValuesIn(autopas::ContainerOption::getAllOptions()),

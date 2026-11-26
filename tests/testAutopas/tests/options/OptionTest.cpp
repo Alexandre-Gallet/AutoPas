@@ -47,6 +47,7 @@ TEST(OptionTest, parseContainerOptionsTest) {
       {autopas::ContainerOption::varVerletListsAsBuild, "varVerletListsAsBuild"},
       {autopas::ContainerOption::verletClusterLists, "vclusterlists"},
       {autopas::ContainerOption::verletLists, "verletLists"},
+      {autopas::ContainerOption::verletListsReferences, "VerletListsReferences"},
       {autopas::ContainerOption::verletListsCells, "verletLists-cells"},
       {autopas::ContainerOption::linkedCellsReferences, "linkedCellsreferenc"},
       {autopas::ContainerOption::pairwiseVerletLists, "pairwiseVerlet"},

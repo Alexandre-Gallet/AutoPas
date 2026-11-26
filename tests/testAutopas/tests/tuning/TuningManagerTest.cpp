@@ -615,6 +615,9 @@ TEST_F(TuningManagerTest, testAllConfigurations) {
   // Verlet Lists only supports CSF >= 1 (i.e. 1.0, 1.5) => Multiply by 2
   configsPerContainer[autopas::ContainerOption::verletLists] = 12;
 
+  // Reference-backed Verlet lists support vl_list_iteration with AoS and Newton3 disabled at CSF 1.0 and 1.5.
+  configsPerContainer[autopas::ContainerOption::verletListsReferences] = 2;
+
   // VerletListsCells:      vlc_sliced                  (AoS <=> SoA x 1 vecPat, newton3 <=> noNewton3)       =   4
   //                        vlc_sliced_balanced         (AoS <=> SoA x 1 vecPat, newton3 <=> noNewton3,
   //                                                     3 LB heuristics)                                     =  12

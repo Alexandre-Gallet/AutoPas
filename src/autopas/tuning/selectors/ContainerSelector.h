@@ -17,6 +17,7 @@
 #include "autopas/containers/verletListsCellBased/verletListsCells/VerletListsCells.h"
 #include "autopas/containers/verletListsCellBased/verletListsCells/VerletListsCellsHelpers.h"
 #include "autopas/containers/verletListsCellBased/verletListsCells/neighborLists/VLCAllCellsNeighborList.h"
+#include "autopas/containers/verletListsCellBased/verletListsReferences/VerletListsReferences.h"
 #include "autopas/options/ContainerOption.h"
 #include "autopas/tuning/selectors/ContainerSelectorInfo.h"
 
@@ -75,6 +76,11 @@ std::unique_ptr<ParticleContainerInterface<Particle_T>> ContainerSelector<Partic
     case ContainerOption::verletLists: {
       container = std::make_unique<VerletLists<Particle_T>>(
           boxMin, boxMax, cutoff, verletSkin, VerletLists<Particle_T>::BuildVerletListType::VerletSoA, cellSizeFactor);
+      break;
+    }
+    case ContainerOption::verletListsReferences: {
+      container = std::make_unique<VerletListsReferences<Particle_T>>(
+          boxMin, boxMax, cutoff, verletSkin, VerletListsReferences<Particle_T>::VerletSoA, cellSizeFactor);
       break;
     }
     case ContainerOption::verletListsCells: {

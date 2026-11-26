@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "autopas/cells/ParticleCell.h"
+#include "autopas/iterators/CellIterator.h"
 #include "autopas/particles/OwnershipState.h"
 #include "autopas/utils/SoA.h"
 #include "autopas/utils/WrapOpenMP.h"

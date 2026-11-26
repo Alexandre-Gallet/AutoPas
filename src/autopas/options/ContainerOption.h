@@ -68,6 +68,10 @@ class ContainerOption : public Option<ContainerOption> {
      * distributed since it is space adaptive
      */
     octree,
+    /**
+     * Per-particle Verlet lists built on linked cells referencing one shared particle vector.
+     */
+    verletListsReferences,
   };
 
   /**
@@ -92,7 +96,8 @@ class ContainerOption : public Option<ContainerOption> {
    * @return
    */
   static std::set<ContainerOption> getDiscouragedOptions() {
-    return {Value::directSum, Value::linkedCellsReferences, Value::varVerletListsAsBuild, Value::octree};
+    return {Value::directSum, Value::linkedCellsReferences, Value::varVerletListsAsBuild, Value::octree,
+            Value::verletListsReferences};
   }
 
   /**
@@ -106,7 +111,7 @@ class ContainerOption : public Option<ContainerOption> {
    * @return
    */
   static std::set<ContainerOption> getAllTriwiseOptions() {
-    return {Value::directSum, Value::linkedCells, Value::verletLists};
+    return {Value::directSum, Value::linkedCells, Value::verletLists, Value::verletListsReferences};
   }
 
   /**
@@ -119,6 +124,7 @@ class ContainerOption : public Option<ContainerOption> {
         {ContainerOption::linkedCells, "LinkedCells"},
         {ContainerOption::linkedCellsReferences, "LinkedCellsReferences"},
         {ContainerOption::verletLists, "VerletLists"},
+        {ContainerOption::verletListsReferences, "VerletListsReferences"},
         {ContainerOption::verletListsCells, "VerletListsCells"},
         {ContainerOption::verletClusterLists, "VerletClusterLists"},
         {ContainerOption::varVerletListsAsBuild, "VarVerletListsAsBuild"},
